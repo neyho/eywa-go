@@ -1,6 +1,6 @@
 # EYWA Client for Go
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/neyho/eywa-client.svg)](https://pkg.go.dev/github.com/neyho/eywa-client)
+[![Go Reference](https://pkg.go.dev/badge/github.com/neyho/eywa-go.svg)](https://pkg.go.dev/github.com/neyho/eywa-go)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 EYWA client library for Go providing JSON-RPC communication, GraphQL queries, and task management for EYWA robots.
@@ -8,7 +8,7 @@ EYWA client library for Go providing JSON-RPC communication, GraphQL queries, an
 ## Installation
 
 ```bash
-go get github.com/neyho/eywa-client
+go get github.com/neyho/eywa-go
 ```
 
 ## Quick Start
@@ -20,7 +20,7 @@ import (
     "log"
     "time"
     
-    "github.com/neyho/eywa-client"
+    "github.com/neyho/eywa-go"
 )
 
 func main() {
@@ -264,7 +264,7 @@ import (
     "log"
     "time"
     
-    "github.com/neyho/eywa-client"
+    "github.com/neyho/eywa-go"
 )
 
 func processData() error {

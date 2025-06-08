@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/neyho/eywa-client"
+	"github.com/neyho/eywa-go"
 )
 
 func processTask() error {

@@ -1,4 +1,3 @@
-module github.com/neyho/eywa-client
+module github.com/neyho/eywa-go
 
 go 1.19
-

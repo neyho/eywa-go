@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/neyho/eywa-client"
+	"github.com/neyho/eywa-go"
 )
 
 func main() {
