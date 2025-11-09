@@ -1,9 +1,18 @@
-# EYWA Client for Go
+# EYWA Files Client for Go
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/neyho/eywa-go.svg)](https://pkg.go.dev/github.com/neyho/eywa-go)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-EYWA client library for Go providing JSON-RPC communication, GraphQL queries, and task management for EYWA robots.
+**Specification-compliant EYWA files client** providing protocol abstraction for upload/download complexity while letting you write direct GraphQL queries for data operations.
+
+## 🎯 Core Principles
+
+- **GraphQL Schema Compliance** - All operations work with current EYWA GraphQL schema
+- **Client UUID Management** - You control UUID generation and file replacement
+- **Single Map Arguments** - Functions use single map arguments that mirror GraphQL schema
+- **No Parameter Mangling** - Direct pass-through to GraphQL without client-side transformation
+- **Protocol Focus** - Abstract protocol complexity, not query complexity
+- **Let GraphQL Be GraphQL** - Write your own queries for complex data retrieval
 
 ## Installation
 
@@ -17,244 +26,250 @@ go get github.com/neyho/eywa-go
 package main
 
 import (
-    "log"
     "time"
-    
     "github.com/neyho/eywa-go"
 )
 
 func main() {
-    // Initialize the client
+    // Initialize EYWA connection
     go eywa.OpenPipe()
     time.Sleep(100 * time.Millisecond)
     
-    // Log messages
-    eywa.Info("Robot started", nil)
-    
-    // Execute GraphQL queries
-    result, err := eywa.GraphQL(`
-        {
-            searchUser(_limit: 10) {
-                euuid
-                name
-                type
-            }
-        }
-    `, nil)
+    // Upload a file with client-controlled UUID
+    err := eywa.Upload("/path/to/file.txt", map[string]interface{}{
+        "euuid": "my-controlled-uuid-123",
+        "name":  "uploaded-file.txt", 
+        "folder": eywa.ROOT_FOLDER,
+    })
     
     if err != nil {
-        eywa.Error("GraphQL failed", map[string]interface{}{
-            "error": err.Error(),
-        })
+        eywa.Error("Upload failed", map[string]interface{}{"error": err.Error()})
+        eywa.CloseTask(eywa.ERROR)
+        return
     }
     
-    // Update task status
-    eywa.UpdateTask(eywa.PROCESSING)
+    // Query files using direct GraphQL (recommended approach)
+    result, err := eywa.GraphQL(`
+        query GetMyFiles($pattern: String!) {
+            searchFile(_where: {name: {_ilike: $pattern}}) {
+                euuid name size uploaded_at
+                folder { name path }
+            }
+        }
+    `, map[string]interface{}{
+        "pattern": "%uploaded%",
+    })
     
-    // Complete the task
+    // Download file content
+    if len(result["data"].(map[string]interface{})["searchFile"].([]interface{})) > 0 {
+        fileUUID := result["data"].(map[string]interface{})["searchFile"].([]interface{})[0].(map[string]interface{})["euuid"].(string)
+        content, err := eywa.Download(fileUUID)
+        if err == nil {
+            eywa.Info("Downloaded file", map[string]interface{}{"size": len(content)})
+        }
+    }
+    
     eywa.CloseTask(eywa.SUCCESS)
 }
 ```
 
-## Features
+## 🏗️ API Reference
 
-- 🚀 **Channel-Based Concurrency** - Idiomatic Go async patterns
-- 📊 **GraphQL Integration** - Execute queries and mutations against EYWA datasets
-- 📝 **Comprehensive Logging** - Multiple log levels with metadata support
-- 🔄 **Task Management** - Update status, report progress, handle task lifecycle
-- 🎯 **Type Safety** - Strongly typed with proper error handling
-- 🔒 **Thread-Safe** - Concurrent operations with mutexes
-
-## API Reference
-
-### Initialization
-
-#### `OpenPipe()`
-Initialize stdin/stdout communication with EYWA runtime. Should be called in a goroutine.
+### Required Constants
 
 ```go
-go eywa.OpenPipe()
-time.Sleep(100 * time.Millisecond) // Give it time to start
+const ROOT_UUID = "87ce50d8-5dfa-4008-a265-053e727ab793"
+var ROOT_FOLDER = map[string]interface{}{"euuid": ROOT_UUID}
 ```
 
-### Logging Functions
-
-#### `Log(event, message string, data interface{}, duration *int, coordinates interface{}, logTime *time.Time)`
-Log a message with full control over all parameters.
+### Exception Types
 
 ```go
-duration := 1500
-now := time.Now()
-eywa.Log(eywa.INFO, "Processing item",
-    map[string]interface{}{"itemId": 123},
-    &duration,
-    map[string]interface{}{"x": 10, "y": 20},
-    &now)
-```
+type FileUploadError struct {
+    Message string
+    Type    string
+    Code    *int
+}
 
-#### `Info()`, `Error()`, `Warn()`, `Debug()`, `Trace()`, `Exception()`
-Convenience methods for different log levels.
-
-```go
-eywa.Info("User logged in", map[string]interface{}{"userId": "abc123"})
-eywa.Error("Failed to process", map[string]interface{}{"error": err.Error()})
-eywa.Exception("Unhandled error", map[string]interface{}{"stack": fmt.Sprintf("%+v", err)})
-```
-
-### Task Management
-
-#### `GetTask() (interface{}, error)`
-Get current task information.
-
-```go
-task, err := eywa.GetTask()
-if err != nil {
-    eywa.Warn("Could not get task", map[string]interface{}{
-        "error": err.Error(),
-    })
-} else {
-    eywa.Info("Processing task", task)
+type FileDownloadError struct {
+    Message string  
+    Type    string
+    Code    *int
 }
 ```
 
-#### `UpdateTask(status string)`
-Update the current task status.
+## 📤 Upload Operations (Protocol Abstraction)
+
+### Upload(filepath, fileData)
+
+Upload a file from local filesystem using the 3-step S3 protocol.
 
 ```go
-eywa.UpdateTask(eywa.PROCESSING)
-```
-
-#### `CloseTask(status string)`
-Close the task with a final status and exit the process.
-
-```go
-err := processData()
-if err != nil {
-    eywa.Error("Task failed", map[string]interface{}{
-        "error": err.Error(),
-    })
-    eywa.CloseTask(eywa.ERROR)
-} else {
-    eywa.CloseTask(eywa.SUCCESS)
-}
-```
-
-#### `ReturnTask()`
-Return control to EYWA without closing the task.
-
-```go
-eywa.ReturnTask()
-```
-
-### Reporting
-
-#### `Report(message string, data interface{}, image interface{})`
-Send a task report with optional data and image.
-
-```go
-eywa.Report("Analysis complete", map[string]interface{}{
-    "accuracy": 0.95,
-    "processed": 1000,
-}, chartImageBase64)
-```
-
-### GraphQL
-
-#### `GraphQL(query string, variables map[string]interface{}) (map[string]interface{}, error)`
-Execute a GraphQL query against the EYWA server.
-
-```go
-// Simple query
-result, err := eywa.GraphQL(`
-    {
-        searchUser {
-            name
-            email
-        }
-    }
-`, nil)
-
-// Query with variables
-result, err := eywa.GraphQL(`
-    mutation CreateUser($input: UserInput!) {
-        syncUser(data: $input) {
-            euuid
-            name
-        }
-    }
-`, map[string]interface{}{
-    "input": map[string]interface{}{
-        "name": "John Doe",
-        "active": true,
+err := eywa.Upload("/path/to/file.pdf", map[string]interface{}{
+    "euuid":        "client-generated-uuid",     // Optional: client controls UUID
+    "name":         "report.pdf",               // Optional: override filename  
+    "folder":       map[string]interface{}{"euuid": folderUuid}, // Optional: target folder
+    "content_type": "application/pdf",          // Optional: override MIME type
+    "progressFn":   func(current, total int64) {
+        fmt.Printf("Progress: %d/%d bytes\n", current, total)
     },
 })
 ```
 
-### JSON-RPC
+**Key Features:**
+- Client controls UUID generation for guaranteed file replacement
+- Auto-detects file size, MIME type, and filename if not provided
+- 3-step protocol: request URL → upload to S3 → confirm
+- Progress tracking support
 
-#### `SendRequest(data map[string]interface{}) chan Response`
-Send a JSON-RPC request and get a channel for the response.
+### UploadStream(inputStream, fileData)
+
+Upload from a stream (size must be known).
 
 ```go
-responseChan := eywa.SendRequest(map[string]interface{}{
-    "method": "custom.method",
-    "params": map[string]interface{}{"foo": "bar"},
+reader := strings.NewReader("Hello, World!")
+err := eywa.UploadStream(reader, map[string]interface{}{
+    "euuid": "stream-upload-uuid",
+    "name":  "hello.txt", 
+    "size":  int64(13),                        // Required for streams
+    "folder": eywa.ROOT_FOLDER,
 })
+```
 
-response := <-responseChan
-if response.Error != nil {
-    log.Printf("Error: %v", response.Error)
-} else {
-    log.Printf("Result: %v", response.Result)
+### UploadContent(content, fileData)
+
+Upload bytes or string content directly.
+
+```go
+content := []byte("Direct content upload")
+err := eywa.UploadContent(content, map[string]interface{}{
+    "euuid":        "content-uuid",
+    "name":         "content.txt",
+    "content_type": "text/plain",              // Defaults to "text/plain"
+    "folder":       eywa.ROOT_FOLDER,
+})
+```
+
+## 📥 Download Operations (Protocol Abstraction)
+
+### Download(fileUuid)
+
+Download complete file as bytes.
+
+```go
+content, err := eywa.Download("file-uuid-here")
+if err != nil {
+    // Handle download error
+}
+// Use content ([]byte)
+```
+
+### DownloadStream(fileUuid)
+
+Download as a stream for large files.
+
+```go
+stream, err := eywa.DownloadStream("large-file-uuid")
+if err != nil {
+    // Handle error
+}
+defer stream.Stream.Close()
+
+// Read from stream.Stream (io.ReadCloser)
+// stream.ContentLength gives total size
+buffer := make([]byte, 8192)
+for {
+    n, err := stream.Stream.Read(buffer)
+    if n > 0 {
+        // Process chunk
+    }
+    if err == io.EOF {
+        break
+    }
 }
 ```
 
-#### `SendNotification(data map[string]interface{})`
-Send a JSON-RPC notification without expecting a response.
+## 📋 Simple CRUD Operations
+
+### CreateFolder(folderData)
+
+Create a new folder.
 
 ```go
-eywa.SendNotification(map[string]interface{}{
-    "method": "custom.event",
-    "params": map[string]interface{}{"status": "ready"},
+err := eywa.CreateFolder(map[string]interface{}{
+    "euuid":  "folder-uuid",                   // Optional: client controls UUID
+    "name":   "My Documents",                  // Required: folder name
+    "parent": eywa.ROOT_FOLDER,                // Optional: parent folder (use ROOT_FOLDER for root)
 })
 ```
 
-#### `RegisterHandler(method string, handler func(Request))`
-Register a handler for incoming JSON-RPC method calls.
+### DeleteFile(fileUuid) / DeleteFolder(folderUuid) 
+
+Delete files or empty folders.
 
 ```go
-eywa.RegisterHandler("custom.ping", func(req eywa.Request) {
-    log.Printf("Received ping: %v", req.Params)
-    eywa.SendNotification(map[string]interface{}{
-        "method": "custom.pong",
-        "params": map[string]interface{}{
-            "timestamp": time.Now().Unix(),
-        },
-    })
-})
+success := eywa.DeleteFile("file-uuid")       // Returns true if successful
+success := eywa.DeleteFolder("folder-uuid")   // Folder must be empty
 ```
 
-## Constants
+## ❌ What's NOT Included (Use Direct GraphQL Instead)
+
+This client **intentionally omits** query functions. Write direct GraphQL for better control:
 
 ```go
-const (
-    SUCCESS    = "SUCCESS"
-    ERROR      = "ERROR"
-    PROCESSING = "PROCESSING"
-    EXCEPTION  = "EXCEPTION"
-)
+// ❌ DON'T use helper functions like ListFiles(), SearchFiles(), GetFileInfo()
+// ✅ DO write direct GraphQL queries:
 
-const (
-    INFO          = "INFO"
-    WARN          = "WARN"
-    DEBUG         = "DEBUG"
-    TRACE         = "TRACE"
-    LOG_ERROR     = "ERROR"
-    LOG_EXCEPTION = "EXCEPTION"
-)
+// Simple file listing
+files, err := eywa.GraphQL(`
+    query GetRecentFiles($limit: Int!) {
+        searchFile(_limit: $limit, _order_by: {uploaded_at: desc}) {
+            euuid name size content_type uploaded_at
+            folder { name path }
+            uploaded_by { name }
+        }
+    }
+`, map[string]interface{}{"limit": 10})
+
+// Complex filtering and relationships
+result, err := eywa.GraphQL(`
+    query FindLargeImageFiles {
+        searchFile(_where: {
+            _and: [
+                {content_type: {_like: "image%"}},
+                {size: {_gt: 1048576}},              # > 1MB
+                {status: {_eq: "UPLOADED"}},
+                {uploaded_at: {_gt: "2024-01-01"}}
+            ]
+        }, _order_by: {size: desc}) {
+            euuid name size content_type
+            folder(_where: {name: {_eq: "photos"}}) {
+                name path
+                parent { name }
+            }
+            uploaded_by { name email }
+        }
+        
+        # Get statistics in same query  
+        stats: searchFile_aggregate(_where: {content_type: {_like: "image%"}}) {
+            aggregate {
+                count
+                sum { size }
+                avg { size }
+            }
+        }
+    }
+`)
 ```
 
-## Complete Example
+**Why this is better:**
+- **No abstraction leakage** - You see exactly what GraphQL executes
+- **Full GraphQL power** - Use any GraphQL features (counts, relations, custom ordering)
+- **No translation bugs** - No client-side parameter conversion errors
+- **Future-proof** - New GraphQL schema features work immediately
+- **Less code** - No complex filtering logic to maintain
+
+## 🔧 Complete Example
 
 ```go
 package main
@@ -262,146 +277,196 @@ package main
 import (
     "fmt"
     "log"
+    "strings"
     "time"
     
     "github.com/neyho/eywa-go"
 )
-
-func processData() error {
-    // Get task
-    task, err := eywa.GetTask()
-    if err != nil {
-        return fmt.Errorf("failed to get task: %w", err)
-    }
-    
-    taskData, ok := task.(map[string]interface{})
-    if !ok {
-        return fmt.Errorf("unexpected task format")
-    }
-    
-    eywa.Info("Starting task", map[string]interface{}{
-        "taskId": taskData["euuid"],
-    })
-    
-    // Update status
-    eywa.UpdateTask(eywa.PROCESSING)
-    
-    // Query data
-    result, err := eywa.GraphQL(`
-        query GetActiveUsers {
-            searchUser(_where: {active: {_eq: true}}) {
-                euuid
-                name
-                email
-            }
-        }
-    `, nil)
-    
-    if err != nil {
-        return fmt.Errorf("GraphQL query failed: %w", err)
-    }
-    
-    // Process results
-    if data, ok := result["data"].(map[string]interface{}); ok {
-        if users, ok := data["searchUser"].([]interface{}); ok {
-            eywa.Info("Found users", map[string]interface{}{
-                "count": len(users),
-            })
-            
-            for _, user := range users {
-                if u, ok := user.(map[string]interface{}); ok {
-                    eywa.Debug("Processing user", map[string]interface{}{
-                        "userId": u["euuid"],
-                    })
-                }
-            }
-            
-            // Report results
-            eywa.Report("Found active users", map[string]interface{}{
-                "count": len(users),
-                "timestamp": time.Now().Unix(),
-            }, nil)
-        }
-    }
-    
-    return nil
-}
 
 func main() {
     // Initialize
     go eywa.OpenPipe()
     time.Sleep(100 * time.Millisecond)
     
-    eywa.Info("Robot started", nil)
+    // Upload with client UUID control
+    clientUUID := fmt.Sprintf("report-%d", time.Now().Unix())
     
-    // Process
-    err := processData()
+    err := eywa.Upload("./monthly-report.pdf", map[string]interface{}{
+        "euuid":   clientUUID,                   // Client controls UUID
+        "name":    "January-2024-Report.pdf",   
+        "folder":  map[string]interface{}{"euuid": "reports-folder-uuid"},
+        "progressFn": func(current, total int64) {
+            fmt.Printf("Uploading: %.1f%%\n", float64(current)/float64(total)*100)
+        },
+    })
+    
     if err != nil {
-        eywa.Error("Task failed", map[string]interface{}{
-            "error": err.Error(),
-        })
+        eywa.Error("Upload failed", map[string]interface{}{"error": err.Error()})
         eywa.CloseTask(eywa.ERROR)
         return
     }
     
-    // Success
-    eywa.Info("Task completed", nil)
+    // Query uploaded reports using direct GraphQL
+    reports, err := eywa.GraphQL(`
+        query GetMonthlyReports($folderUuid: UUID!) {
+            searchFile(_where: {
+                _and: [
+                    {folder: {euuid: {_eq: $folderUuid}}},
+                    {name: {_ilike: "%-Report.pdf"}},
+                    {status: {_eq: "UPLOADED"}}
+                ]
+            }, _order_by: {uploaded_at: desc}) {
+                euuid
+                name
+                size
+                uploaded_at
+                uploaded_by { name }
+            }
+        }
+    `, map[string]interface{}{
+        "folderUuid": "reports-folder-uuid",
+    })
+    
+    if err != nil {
+        eywa.Error("Query failed", map[string]interface{}{"error": err.Error()})
+        return
+    }
+    
+    // Process results
+    if data, ok := reports["data"].(map[string]interface{}); ok {
+        if files, ok := data["searchFile"].([]interface{}); ok {
+            eywa.Info("Found reports", map[string]interface{}{"count": len(files)})
+            
+            for _, file := range files {
+                if f, ok := file.(map[string]interface{}); ok {
+                    // Download each report for processing
+                    content, err := eywa.Download(f["euuid"].(string))
+                    if err != nil {
+                        continue
+                    }
+                    
+                    // Process PDF content...
+                    eywa.Info("Processed report", map[string]interface{}{
+                        "name": f["name"],
+                        "size": len(content),
+                    })
+                }
+            }
+        }
+    }
+    
+    // Create organized folder structure
+    archiveFolder := fmt.Sprintf("archive-%d", time.Now().Year())
+    err = eywa.CreateFolder(map[string]interface{}{
+        "euuid":  fmt.Sprintf("archive-%d-uuid", time.Now().Year()),
+        "name":   archiveFolder,
+        "parent": map[string]interface{}{"euuid": "reports-folder-uuid"},
+    })
+    
+    if err != nil {
+        eywa.Warn("Archive folder creation failed", map[string]interface{}{"error": err.Error()})
+    }
+    
     eywa.CloseTask(eywa.SUCCESS)
 }
 ```
 
-## Error Handling
-
-All functions that can fail return proper Go errors:
+## 🛡️ Error Handling
 
 ```go
-result, err := eywa.GraphQL("{ invalid }")
-if err != nil {
-    eywa.Error("GraphQL failed", map[string]interface{}{
-        "error": err.Error(),
-        "query": "{ invalid }",
-    })
-    return err
+// Upload errors
+err := eywa.Upload("/nonexistent/file.txt", map[string]interface{}{
+    "name": "test.txt",
+})
+if uploadErr, ok := err.(*eywa.FileUploadError); ok {
+    fmt.Printf("Upload error: %s (type: %s)\n", uploadErr.Message, uploadErr.Type)
+}
+
+// Download errors  
+content, err := eywa.Download("invalid-uuid")
+if downloadErr, ok := err.(*eywa.FileDownloadError); ok {
+    fmt.Printf("Download error: %s\n", downloadErr.Message)
 }
 ```
 
-## Buffer Management
+## 🧪 Testing
 
-The client handles large JSON responses with increased buffer sizes:
-
-```go
-// Automatically configured in OpenPipe()
-scanner.Buffer(buf, 1024*1024) // 1MB max
-```
-
-## Testing
-
-Test your robot locally using the EYWA CLI:
+Run the specification compliance test:
 
 ```bash
-eywa run -c 'go run my-robot.go'
+cd examples
+eywa run -c 'go run files_compliance_test.go'
 ```
 
-## Thread Safety
+This test verifies:
+- ✅ All required constants exist
+- ✅ Single map argument APIs
+- ✅ Client UUID management 
+- ✅ Protocol abstraction (3-step upload)
+- ✅ Stream support and progress callbacks
+- ✅ Direct GraphQL usage for queries
+- ✅ Proper error types
+- ✅ CRUD operations work correctly
 
-All operations are thread-safe:
-- Mutex protection for callbacks and handlers
-- Channel-based communication
-- Safe concurrent access
+## 🔄 Migration from Old API
 
-## Requirements
+If you have existing code using the old API, here's how to migrate:
+
+```go
+// OLD (non-compliant):
+fileInfo, err := eywa.UploadFile("/path/file.txt", &eywa.UploadFileOptions{
+    Name:       "custom.txt",
+    FolderUUID: "folder-id",
+})
+files, err := eywa.ListFiles(&eywa.ListFilesOptions{Limit: &limit})
+
+// NEW (specification-compliant):
+err := eywa.Upload("/path/file.txt", map[string]interface{}{
+    "name":   "custom.txt", 
+    "folder": map[string]interface{}{"euuid": "folder-id"},
+})
+
+// Use direct GraphQL instead of ListFiles:
+result, err := eywa.GraphQL(`
+    query GetFiles($limit: Int!) {
+        searchFile(_limit: $limit) { euuid name size }
+    }
+`, map[string]interface{}{"limit": 10})
+```
+
+## 📋 Requirements
 
 - Go 1.19+
+- EYWA server connection via `eywa run` command
 - No external dependencies (uses only standard library)
 
-## License
+## 🎯 Success Criteria
+
+This implementation satisfies the EYWA Files specification by:
+
+1. ✅ **Handling upload/download protocols** - Abstracts 3-step S3 complexity
+2. ✅ **Providing simple CRUD mutations** - Basic create/delete operations  
+3. ✅ **Letting GraphQL be GraphQL** - No query abstraction, direct user control
+4. ✅ **Supporting all required functions** - 8 core functions implemented
+5. ✅ **Proper error handling** - Typed exceptions with meaningful messages
+6. ✅ **Progress tracking** - For upload/download operations
+7. ✅ **Client UUID management** - Users control file UUIDs for replacement
+8. ✅ **Single map arguments** - Mirror GraphQL schema directly
+
+## 📖 Philosophy
+
+This client is a **thin, reliable protocol layer** - not a query abstraction layer. It handles what's complex (S3 upload protocol) and lets you control what should be flexible (data queries via GraphQL).
+
+**The goal: Make file upload/download simple while keeping data queries powerful.**
+
+## 📜 License
 
 MIT
 
-## Contributing
+## 🤝 Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+This implementation follows the [EYWA Files Client Functional Specification](./FILES_SPEC.md). When contributing, ensure all changes maintain specification compliance.
 
-## Support
+## 📞 Support
 
 For issues and questions, please visit the [EYWA repository](https://github.com/neyho/eywa).
