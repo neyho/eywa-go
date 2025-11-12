@@ -2,11 +2,13 @@ package eywa
 
 import (
 	"bufio"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"math/rand"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -55,11 +57,33 @@ type LogParams struct {
 	Duration    *int        `json:"duration,omitempty"`
 }
 
-// ReportParams represents parameters for reporting
+// ReportData represents structured report data with cards and tables
+type ReportData struct {
+	Card   string                 `json:"card,omitempty"`
+	Tables map[string]TableData   `json:"tables,omitempty"`
+}
+
+// TableData represents a table with headers and rows
+type TableData struct {
+	Headers []string      `json:"headers"`
+	Rows    [][]interface{} `json:"rows"`
+}
+
+// ReportOptions represents options for creating reports
+type ReportOptions struct {
+	Data  *ReportData `json:"data,omitempty"`
+	Image string      `json:"image,omitempty"`
+}
+
+// ReportParams represents parameters for reporting (internal use)
 type ReportParams struct {
-	Message string      `json:"message"`
-	Data    interface{} `json:"data,omitempty"`
-	Image   interface{} `json:"image,omitempty"`
+	Message   string                 `json:"message"`
+	Data      interface{}            `json:"data,omitempty"`
+	Image     string                 `json:"image,omitempty"`
+	HasCard   bool                   `json:"has_card"`
+	HasTable  bool                   `json:"has_table"`
+	HasImage  bool                   `json:"has_image"`
+	Task      map[string]interface{} `json:"task"`
 }
 
 // TaskParams represents task-related parameters
@@ -188,14 +212,87 @@ func Exception(message string, data interface{}) {
 	Log(LOG_EXCEPTION, message, data, nil, nil, nil)
 }
 
-// Report sends a task report
-func Report(message string, data interface{}, image interface{}) {
+// Report creates a structured task report following EYWA schema exactly
+// Matches the corrected Node.js implementation
+func Report(message string, options *ReportOptions) error {
+	// Get current task UUID
+	taskData, err := GetTask()
+	if err != nil {
+		return fmt.Errorf("cannot create report: no active task found: %v", err)
+	}
+	
+	// Extract UUID from task data
+	var currentTaskUUID string
+	if taskMap, ok := taskData.(map[string]interface{}); ok {
+		if euuid, exists := taskMap["euuid"]; exists {
+			currentTaskUUID = fmt.Sprintf("%v", euuid)
+		} else if id, exists := taskMap["id"]; exists {
+			currentTaskUUID = fmt.Sprintf("%v", id)
+		} else {
+			return fmt.Errorf("task UUID not found in task data")
+		}
+	} else {
+		return fmt.Errorf("invalid task data format")
+	}
+	
+	// Build report data structure
+	reportData := ReportParams{
+		Message: message,
+		Task: map[string]interface{}{
+			"euuid": currentTaskUUID,
+		},
+	}
+	
+	// Process data and set flags
+	if options != nil && options.Data != nil {
+		reportData.Data = options.Data
+		reportData.HasCard = len(options.Data.Card) > 0
+		reportData.HasTable = len(options.Data.Tables) > 0
+	} else {
+		reportData.HasCard = false
+		reportData.HasTable = false
+	}
+	
+	// Process image and validate
+	if options != nil && len(options.Image) > 0 {
+		if !isValidBase64(options.Image) {
+			return fmt.Errorf("invalid base64 image data")
+		}
+		reportData.Image = options.Image
+		reportData.HasImage = true
+	} else {
+		reportData.HasImage = false
+	}
+	
+	// Validate table structure if present
+	if options != nil && options.Data != nil && options.Data.Tables != nil {
+		if err := validateTables(options.Data.Tables); err != nil {
+			return err
+		}
+	}
+	
+	// Note: metadata is not supported by EYWA Task Report schema
+	// The Task Report entity only supports: message, data, image, has_* flags
+	
+	// Send report via JSON-RPC
 	SendNotification(map[string]interface{}{
 		"method": "task.report",
-		"params": ReportParams{
-			Message: message,
-			Data:    data,
-			Image:   image,
+		"params": reportData,
+	})
+	
+	return nil
+}
+
+// ReportSimple is a convenience function for simple text reports
+func ReportSimple(message string) error {
+	return Report(message, nil)
+}
+
+// ReportWithCard creates a report with markdown card content
+func ReportWithCard(message, card string) error {
+	return Report(message, &ReportOptions{
+		Data: &ReportData{
+			Card: card,
 		},
 	})
 }
@@ -342,4 +439,54 @@ func sendJSON(data interface{}) {
 		return
 	}
 	fmt.Println(string(encoded))
+}
+
+// Validation helper functions (following Node.js implementation)
+
+// isValidBase64 validates base64 string (matches Node.js implementation)
+func isValidBase64(str string) bool {
+	if len(strings.TrimSpace(str)) == 0 {
+		return false
+	}
+	
+	// Try to decode the base64 string
+	decoded, err := base64.StdEncoding.DecodeString(str)
+	if err != nil {
+		return false
+	}
+	
+	// Re-encode and compare (matches Node.js btoa/atob pattern)
+	reencoded := base64.StdEncoding.EncodeToString(decoded)
+	return reencoded == str
+}
+
+// validateTables validates table structure (matches Node.js implementation)
+func validateTables(tables map[string]TableData) error {
+	if tables == nil {
+		return fmt.Errorf("tables must be a map with named table entries")
+	}
+	
+	for tableName, tableData := range tables {
+		if tableData.Headers == nil {
+			return fmt.Errorf("table '%s' must have a 'headers' array", tableName)
+		}
+		
+		if tableData.Rows == nil {
+			return fmt.Errorf("table '%s' must have a 'rows' array", tableName)
+		}
+		
+		// Validate each row has same number of columns as headers
+		headerCount := len(tableData.Headers)
+		for i, row := range tableData.Rows {
+			if row == nil {
+				return fmt.Errorf("table '%s' row %d cannot be nil", tableName, i)
+			}
+			if len(row) != headerCount {
+				return fmt.Errorf("table '%s' row %d has %d columns but headers specify %d",
+					tableName, i, len(row), headerCount)
+			}
+		}
+	}
+	
+	return nil
 }
